@@ -25,6 +25,7 @@ from flaggems_vllm.runtime.backend._ascend.ops.hyperconnection import (
     qwen4_hc_inject_combine,
 )
 from flaggems_vllm.runtime.backend._ascend.ops.ple_state import ple_state_scatter_
+from flaggems_vllm.runtime.backend._ascend.ops.qsa import qwen4_store_qsa_kv_rows
 from flaggems_vllm.runtime.backend._ascend.ops.qsa_mqa import qwen4_qsa_mqa_paged_dot
 from flaggems_vllm.runtime.backend._ascend.ops.scaled_int8_quant import (
     scaled_int8_quant,
@@ -34,6 +35,7 @@ __all__ = [
     "fused_experts_impl",
     "inplace_fused_experts",
     "outplace_fused_experts",
+    "qwen4_store_qsa_kv_rows",
     "qwen4_hc_inject_combine",
     "ple_state_scatter_",
     "qwen4_qsa_mqa_paged_dot",
