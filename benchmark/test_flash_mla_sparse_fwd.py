@@ -252,7 +252,9 @@ class FlashmlaSparseBenchmark(base.Benchmark):
 @pytest.mark.flash_mla_sparse_fwd
 @pytest.mark.skipif(
     not HAS_VLLM_FLASHMLA_SPARSE,
-    reason=VLLM_FLASHMLA_SPARSE_UNAVAILABLE_REASON,
+    reason=(
+        VLLM_FLASHMLA_SPARSE_UNAVAILABLE_REASON or "vLLM sparse FlashMLA is unavailable"
+    ),
 )
 def test_flash_mla_sparse_fwd():
     bench = FlashmlaSparseBenchmark()
