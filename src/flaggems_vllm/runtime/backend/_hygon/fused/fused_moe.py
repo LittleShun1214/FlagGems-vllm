@@ -333,10 +333,12 @@ def get_default_config(
         else:
             block_m = 128
 
+        # Follow vLLM: grouping only helps when each expert sees enough token
+        # blocks to reuse weight tiles from L2; with many experts each one sees
+        # few tokens, so grouping is useless (measured: M=4108/13422/16384 on
+        # Hygon prefer GROUP_SIZE_M=1 for both GEMMs).
         if tokens_per_expert > 128:
             group_m = 16
-        elif tokens_per_expert > 32:
-            group_m = 8
         else:
             group_m = 1
 
@@ -376,7 +378,7 @@ def get_default_config(
             group_m = 1
             num_stages = 4
         elif use_gemm2_fast_path:
-            group_m = 2
+            group_m = 1
             num_stages = 4
 
         smem_per_stage = (block_m * block_k + block_k * block_n) * 2
