@@ -30,6 +30,9 @@ from flaggems_vllm.runtime.backend._ascend.ops.compressor import (
     compressor_prepared,
     prepare_compressor_workspace,
 )
+from flaggems_vllm.runtime.backend._ascend.ops.deepseek_v4_attention_combine_topk_swa_indices import (
+    combine_topk_swa_indices,
+)
 from flaggems_vllm.runtime.backend._ascend.ops.fused_moe import (
     fused_experts_impl,
     inplace_fused_experts,
@@ -79,4 +82,5 @@ __all__ = [
     "compressor_prepared",
     "prepare_compressor_workspace",
     "build_compressor_metadata",
+    "combine_topk_swa_indices",
 ]
