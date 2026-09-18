@@ -57,6 +57,12 @@ from flaggems_vllm.runtime.backend._ascend.ops.sparse_attn_sharedkv import (
     sparse_attn_sharedkv,
 )
 from flaggems_vllm.runtime.backend._ascend.ops.swiglu import swiglu
+from flaggems_vllm.runtime.backend._ascend.ops.top_k_per_row_decode import (
+    top_k_per_row_decode,
+)
+from flaggems_vllm.runtime.backend._ascend.ops.top_k_per_row_prefill import (
+    top_k_per_row_prefill,
+)
 
 __all__ = [
     "SUPPORTED_FP8_DTYPE",
@@ -83,4 +89,6 @@ __all__ = [
     "prepare_compressor_workspace",
     "build_compressor_metadata",
     "combine_topk_swa_indices",
+    "top_k_per_row_prefill",
+    "top_k_per_row_decode",
 ]
