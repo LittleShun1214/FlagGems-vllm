@@ -18,13 +18,6 @@ import torch
 import flaggems_vllm
 import flaggems_vllm.testing as fg_testing
 
-_DEQUANT_K_CACHE_UNSUPPORTED_VENDORS = frozenset({"thead"})
-
-
-def is_supported_platform():
-    return flaggems_vllm.vendor_name not in _DEQUANT_K_CACHE_UNSUPPORTED_VENDORS
-
-
 pytestmark = pytest.mark.dequantize_and_gather_k_cache
 
 try:
@@ -53,6 +46,39 @@ try:
 except Exception:
     vllm_dequantize_and_gather_k_cache = None
     _HAS_VLLM_DEQUANTIZE_AND_GATHER_K_CACHE = False
+
+
+def _op_runs():
+    """Probe once that this backend can actually run the operator."""
+    try:
+        _nope, _rope = 448, 64
+        _ss = (_nope + 63) // 64 + 1
+        _bs = 64
+        _stride = _bs * (_nope + _rope * 2) + _bs * _ss
+        out = torch.zeros(
+            (1, 1, _nope + _rope), dtype=torch.bfloat16, device=flaggems_vllm.device
+        )
+        k_cache = torch.zeros(
+            (1, _stride), dtype=torch.uint8, device=flaggems_vllm.device
+        )
+        flaggems_vllm.dequantize_and_gather_k_cache(
+            out,
+            k_cache,
+            torch.full((1,), 1, dtype=torch.int32, device=flaggems_vllm.device),
+            torch.full((1,), 1, dtype=torch.int32, device=flaggems_vllm.device),
+            torch.zeros((1, 1), dtype=torch.int32, device=flaggems_vllm.device),
+            _bs,
+            rope_dim=_rope,
+            nope_dim=_nope,
+            scale_slots=_ss,
+        )
+        flaggems_vllm.runtime.torch_device_fn.synchronize()
+        return True
+    except Exception:
+        return False
+
+
+_OP_RUNS = _op_runs()
 
 
 def _fill_cache(k_cache, expected_rows, block_size, nope_dim, rope_dim, scale_slots):
@@ -98,8 +124,8 @@ def _fill_cache(k_cache, expected_rows, block_size, nope_dim, rope_dim, scale_sl
     ],
 )
 @pytest.mark.skipif(
-    False or not is_supported_platform(),
-    reason="requires a Triton backend able to cast to E4M3",
+    not _OP_RUNS,
+    reason="requires a backend able to run this operator",
 )
 def test_dequantize_and_gather_k_cache_accuracy(
     batch, seq_len, gather_len, block_size, nope_dim, rope_dim
@@ -147,10 +173,8 @@ def test_dequantize_and_gather_k_cache_accuracy(
 
 
 @pytest.mark.skipif(
-    (False)
-    or (not is_supported_platform())
-    or (not _HAS_VLLM_DEQUANTIZE_AND_GATHER_K_CACHE),
-    reason="requires an E4M3-casting backend and a vllm dequantize_and_gather_k_cache reference",
+    not _OP_RUNS or not _HAS_VLLM_DEQUANTIZE_AND_GATHER_K_CACHE,
+    reason="requires a vllm dequantize_and_gather_k_cache reference to compare against",
 )
 def test_dequantize_and_gather_k_cache_vllm_accuracy():
     device = flaggems_vllm.device

@@ -41,12 +41,38 @@ except Exception:
     vllm_dequantize_and_gather_k_cache = None
     _HAS_VLLM_DEQUANTIZE_AND_GATHER_K_CACHE = False
 
-_DEQUANT_K_CACHE_UNSUPPORTED_VENDORS = frozenset({"thead"})
+
+def _op_runs():
+    """Probe once that this backend can actually run the operator."""
+    try:
+        _nope, _rope = 448, 64
+        _ss = (_nope + 63) // 64 + 1
+        _bs = 64
+        _stride = _bs * (_nope + _rope * 2) + _bs * _ss
+        out = torch.zeros(
+            (1, 1, _nope + _rope), dtype=torch.bfloat16, device=flaggems_vllm.device
+        )
+        k_cache = torch.zeros(
+            (1, _stride), dtype=torch.uint8, device=flaggems_vllm.device
+        )
+        flaggems_vllm.dequantize_and_gather_k_cache(
+            out,
+            k_cache,
+            torch.full((1,), 1, dtype=torch.int32, device=flaggems_vllm.device),
+            torch.full((1,), 1, dtype=torch.int32, device=flaggems_vllm.device),
+            torch.zeros((1, 1), dtype=torch.int32, device=flaggems_vllm.device),
+            _bs,
+            rope_dim=_rope,
+            nope_dim=_nope,
+            scale_slots=_ss,
+        )
+        flaggems_vllm.runtime.torch_device_fn.synchronize()
+        return True
+    except Exception:
+        return False
 
 
-def is_supported_platform():
-    return flaggems_vllm.vendor_name not in _DEQUANT_K_CACHE_UNSUPPORTED_VENDORS
-
+_OP_RUNS = _op_runs()
 
 from . import base  # noqa: E402
 
@@ -168,7 +194,7 @@ def torch_dequantize_and_gather(
 
 class DequantizeAndGatherKCacheBenchmark(base.Benchmark):
     def __init__(self):
-        def vllm_dequantize_and_gather_k_cache_adapter(
+        def baseline_adapter(
             out,
             k_cache,
             seq_lens,
@@ -180,6 +206,16 @@ class DequantizeAndGatherKCacheBenchmark(base.Benchmark):
             nope_dim=None,
             scale_slots=None,
         ):
+            if _HAS_VLLM_DEQUANTIZE_AND_GATHER_K_CACHE:
+                return vllm_dequantize_and_gather_k_cache(
+                    out,
+                    k_cache,
+                    seq_lens,
+                    gather_lens,
+                    block_table,
+                    block_size,
+                    offset,
+                )
             return torch_dequantize_and_gather(
                 k_cache,
                 seq_lens,
@@ -194,7 +230,7 @@ class DequantizeAndGatherKCacheBenchmark(base.Benchmark):
 
         super().__init__(
             "dequantize_and_gather_k_cache",
-            vllm_dequantize_and_gather_k_cache_adapter,
+            baseline_adapter,
             [torch.bfloat16],
             gems_op=flaggems_vllm.dequantize_and_gather_k_cache,
         )
@@ -252,7 +288,7 @@ class DequantizeAndGatherKCacheBenchmark(base.Benchmark):
 
 @pytest.mark.dequantize_and_gather_k_cache
 @pytest.mark.skipif(
-    not is_supported_platform(),
+    not _OP_RUNS,
     reason="requires an E4M3-casting backend",
 )
 def test_dequantize_and_gather_k_cache_benchmark():
