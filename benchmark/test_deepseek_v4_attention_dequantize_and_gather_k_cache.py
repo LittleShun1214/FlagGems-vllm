@@ -22,7 +22,7 @@ try:
         dequantize_and_gather_k_cache as vllm_dequantize_and_gather_k_cache,
     )
 
-    # Ascend 上 vllm 基线 kernel 自身编译不过（pointer bitcast），做一次最小调用探测。
+    # The vllm baseline kernel does not compile on every backend (pointer bitcast on Ascend).
     try:
         vllm_dequantize_and_gather_k_cache(
             torch.zeros((1, 1, 64), dtype=torch.bfloat16, device=flaggems_vllm.device),
@@ -109,12 +109,10 @@ def _ue8m0_lut(device):
 
 
 def _e4m3_bytes_to_f32(u8):
-    """fp8 字节 -> float32（device 端 LUT，无 CPU 往返）。"""
     return torch.index_select(_e4m3_lut(u8.device), 0, u8.to(torch.int64))
 
 
 def _exact_pow2(exponent):
-    """2 ** exponent（整数指数，device 端 LUT，避开 Ascend 上 exp2 的 1 ULP 偏差）。"""
     return torch.index_select(
         _ue8m0_lut(exponent.device), 0, exponent.to(torch.int64).clamp(0, 255)
     )
@@ -131,7 +129,6 @@ def torch_dequantize_and_gather(
     nope_dim=448,
     scale_slots=8,
 ):
-    """torch 小算子 baseline（向量化）。"""
     token_data_size = nope_dim + rope_dim * 2
     batch = seq_lens.shape[0]
     gc = gather_lens if gather_lens is not None else seq_lens
@@ -178,7 +175,7 @@ def torch_dequantize_and_gather(
     rb = flat[(d_idx.unsqueeze(1) + nope_dim + rar).reshape(-1)].reshape(
         n_tok, rope_dim * 2
     )
-    rope = rb.contiguous().view(torch.bfloat16)  # [n_tok, rope_dim] bf16，按字节解释
+    rope = rb.contiguous().view(torch.bfloat16)  # [n_tok, rope_dim] bf16, by bytes
 
     out = torch.zeros(
         (batch, max_gl, nope_dim + rope_dim), dtype=torch.bfloat16, device=dev

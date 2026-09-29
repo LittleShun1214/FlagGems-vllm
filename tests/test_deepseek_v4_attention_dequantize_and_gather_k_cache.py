@@ -25,8 +25,8 @@ try:
         dequantize_and_gather_k_cache as vllm_dequantize_and_gather_k_cache,
     )
 
-    # Ascend 上 vllm 基线 kernel 自身编译不过（pointer bitcast），
-    # 故 import 成功后再做一次最小调用探测（同 persistent_topk 的 HAS_VLLM 模式）。
+    # The vllm reference kernel does not compile on every backend (pointer bitcast on
+    # Ascend), so import success alone is not enough: probe with a minimal call.
     try:
         _pr = torch.zeros((1, 1, 64), dtype=torch.bfloat16, device=flaggems_vllm.device)
         _pk = torch.zeros((1, 1024), dtype=torch.uint8, device=flaggems_vllm.device)
@@ -87,8 +87,8 @@ def _fill_cache(k_cache, expected_rows, block_size, nope_dim, rope_dim, scale_sl
         block = slot // block_size
         pos = slot % block_size
         base = pos * token_data_size
-        # Ascend 上 aclnnInplaceCopy 不支持 fp8（连设备端 f32->fp8 转换都会走 copy_），
-        # 故在 CPU 上造出 fp8 字节，再以 uint8 搬到目标设备。
+        # Ascend rejects fp8 in aclnnInplaceCopy, so build the bytes on CPU
+        # and move them as uint8.
         x = (
             (torch.arange(nope_dim, dtype=torch.float32) / 32.0 + slot / 8.0)
             .to(torch.float8_e4m3fn)
@@ -105,7 +105,6 @@ def _fill_cache(k_cache, expected_rows, block_size, nope_dim, rope_dim, scale_sl
         k_cache[block, base + nope_dim : base + nope_dim + rope_dim * 2] = rope
         scale_base = block_size * token_data_size + pos * scale_slots
         k_cache[block, scale_base : scale_base + scale_slots] = 127
-        # fp8 视图/转换在 Ascend 上不可用，改为 uint8 -> f32 在 CPU 上算完再搬
         row[..., :nope_dim] = (
             x.cpu()
             .view(torch.float8_e4m3fn)
