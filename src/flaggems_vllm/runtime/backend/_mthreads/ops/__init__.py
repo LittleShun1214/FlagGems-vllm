@@ -18,6 +18,9 @@ from flaggems_vllm.runtime.backend._mthreads.ops.compress_norm_mrope import (
 from flaggems_vllm.runtime.backend._mthreads.ops.deepseek_v4_attention_fused_q_kv_rmsnorm import (
     fused_q_kv_rmsnorm,
 )
+from flaggems_vllm.runtime.backend._mthreads.ops.dequantize_and_gather_k_cache import (
+    dequantize_and_gather_k_cache,
+)
 from flaggems_vllm.runtime.backend._mthreads.ops.flash_attn_varlen_func_w8a8_fp8 import (
     flash_attn_varlen_func_w8a8_fp8,
 )
@@ -53,6 +56,7 @@ from flaggems_vllm.runtime.backend._mthreads.ops.w8a8_block_fp8_matmul import (
 )
 
 __all__ = [
+    "dequantize_and_gather_k_cache",
     "w8a8_block_fp8_matmul",
     "SUPPORTED_FP8_DTYPE",
     "fused_inv_rope_fp8_quant",
