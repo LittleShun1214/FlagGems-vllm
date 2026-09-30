@@ -67,6 +67,14 @@ else:
         except ImportError:
             pass
         HAS_VLLM = hasattr(getattr(torch.ops, "_C", None), "persistent_topk")
+    elif not torch.cuda.is_available():
+        # Non-CUDA build (Ascend / Hygon / ...): vLLM's `_C` extension is
+        # CUDA-only, so there is no torch.ops._C.persistent_topk to probe
+        # for. Keep the torch.topk reference and skip the probe entirely:
+        # on a CPU-only torch the probe raises AssertionError ("Torch not
+        # compiled with CUDA enabled"), which aborts collection of the
+        # whole file before any test runs.
+        HAS_VLLM = False
     else:
         # `vllm._custom_ops` may import cleanly even when the compiled C++
         # extension is missing, in which case the native op raises
@@ -85,7 +93,13 @@ else:
                 4102,
             )
             HAS_VLLM = True
-        except (ImportError, AttributeError, NotImplementedError, RuntimeError):
+        except (
+            ImportError,
+            AttributeError,
+            NotImplementedError,
+            RuntimeError,
+            AssertionError,
+        ):
             pass
 
 STRIDE = 262144
