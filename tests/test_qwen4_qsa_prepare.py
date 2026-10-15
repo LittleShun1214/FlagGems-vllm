@@ -60,6 +60,10 @@ MAIN_ROTARY_DIM = 2 * MAIN_HALF
 MIXED_BATCH = ([260, 259, 138], [1, 1, 37], [8, 8, 8])
 FRESH_BATCH = ([37], [37], [0])
 TILED_BATCH = ([4097], [4097], [0])
+# Sixteen single-token requests behind long histories: the one layout where every
+# request contributes one token, so the ring commit stores a single row for each
+# of them and takes the scalar path instead of the [STATE_SIZE, D] tile.
+DECODE_BATCH = ([512] * 16, [1] * 16, [8] * 16)
 
 CASES = [
     pytest.param(True, True, True, 4, MIXED_BATCH, id="mrope"),
@@ -72,6 +76,12 @@ CASES = [
     pytest.param(False, False, True, 4, MIXED_BATCH, id="text-with-position-cache"),
     pytest.param(True, True, True, 4, FRESH_BATCH, id="fresh"),
     pytest.param(True, True, True, 4, TILED_BATCH, id="tiled"),
+    pytest.param(True, True, True, 4, DECODE_BATCH, id="decode"),
+    pytest.param(True, True, True, 8, DECODE_BATCH, id="decode-state-8"),
+    pytest.param(True, True, False, 4, DECODE_BATCH, id="decode-no-position-cache"),
+    pytest.param(
+        False, False, False, 4, DECODE_BATCH, id="decode-text-no-position-cache"
+    ),
 ]
 
 DTYPES = [

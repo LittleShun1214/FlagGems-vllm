@@ -207,6 +207,7 @@ def _qsa_prepare_kernel(
     MAIN_D: tl.constexpr,
     MAIN_PAGE_SIZE: tl.constexpr,
     MAIN_TILE_T: tl.constexpr,
+    DECODE_ONLY: tl.constexpr,
 ):
     pid = tl.program_id(0)
     num_index_work = num_k_work + tl.cdiv(num_tokens, TILE_T_Q) * tl.cdiv(HQ, TILE_H_Q)
@@ -576,53 +577,111 @@ def _qsa_prepare_kernel(
             # Keep every lane past those loads before overwriting the same ring.
             tl.debug_barrier()
             # One CTA per request commits only the suffix retained by the ring.
-            num_state_rows = tl.minimum(query_len, STATE_SIZE)
-            rows = tl.arange(0, STATE_SIZE)
-            rmask = rows < num_state_rows
-            tokens = (query_end - num_state_rows + rows).to(tl.int64)
-            valid_token = (
-                (tokens >= query_start) & (tokens < query_end) & (tokens < num_tokens)
-            )
-            slot = tl.load(state_slots_ptr + tokens, mask=rmask & valid_token, other=-1)
-            valid_slot = (
-                valid_token & (slot >= 0) & (slot < num_state_blocks * STATE_SIZE)
-            )
-            safe_slot = tl.maximum(slot, 0)
-            block_idx = (safe_slot // STATE_SIZE).to(tl.int64)
-            ring_idx = safe_slot % STATE_SIZE
-            state_row = (
-                state_cache_ptr
-                + block_idx[:, None] * state_cache_stride_block
-                + ring_idx[:, None] * state_cache_stride_token
-            )
-            d2 = (rmask & valid_slot)[:, None]
-            src = k_ptr + tl.maximum(tokens, 0)[:, None] * k_stride_token
-            k = tl.load(src + dims[None, :], mask=d2, other=0.0)
-            tl.store(state_row + dims[None, :], k, mask=d2)
-            if CACHE_HAS_ROPE_POS:
-                smask = rmask & valid_slot
-                safe_tokens = tl.maximum(tokens, 0)
-                pos_t = tl.load(
-                    pos_ptr + safe_tokens * pos_stride_token, mask=smask, other=0
+            if DECODE_ONLY:
+                # Every request contributes exactly one token here, so the commit is
+                # a single row: move it as a [D] vector instead of a
+                # [STATE_SIZE, D] tile whose other rows are all masked off. The
+                # masked rows still issue their loads and stores, which is most of
+                # the commit's cost when only one row is live.
+                token = (query_end - 1).to(tl.int64)
+                valid_token = (
+                    (token >= query_start) & (token < query_end) & (token < num_tokens)
                 )
-                if IS_2D_POSITIONS:
-                    pos_h = tl.load(
-                        pos_ptr + pos_stride_axis + safe_tokens * pos_stride_token,
-                        mask=smask,
+                slot = tl.load(state_slots_ptr + token, mask=valid_token, other=-1)
+                valid_slot = (
+                    valid_token & (slot >= 0) & (slot < num_state_blocks * STATE_SIZE)
+                )
+                safe_slot = tl.maximum(slot, 0)
+                block_idx = (safe_slot // STATE_SIZE).to(tl.int64)
+                ring_idx = safe_slot % STATE_SIZE
+                state_row = (
+                    state_cache_ptr
+                    + block_idx * state_cache_stride_block
+                    + ring_idx * state_cache_stride_token
+                )
+                safe_token = tl.maximum(token, 0)
+                k = tl.load(
+                    k_ptr + safe_token * k_stride_token + dims,
+                    mask=valid_slot,
+                    other=0.0,
+                )
+                tl.store(state_row + dims, k, mask=valid_slot)
+                if CACHE_HAS_ROPE_POS:
+                    pos_t = tl.load(
+                        pos_ptr + safe_token * pos_stride_token,
+                        mask=valid_slot,
                         other=0,
                     )
-                    pos_w = tl.load(
-                        pos_ptr + 2 * pos_stride_axis + safe_tokens * pos_stride_token,
-                        mask=smask,
-                        other=0,
+                    if IS_2D_POSITIONS:
+                        pos_h = tl.load(
+                            pos_ptr + pos_stride_axis + safe_token * pos_stride_token,
+                            mask=valid_slot,
+                            other=0,
+                        )
+                        pos_w = tl.load(
+                            pos_ptr + 2 * pos_stride_axis + safe_token * pos_stride_token,
+                            mask=valid_slot,
+                            other=0,
+                        )
+                    else:
+                        pos_h = pos_t
+                        pos_w = pos_t
+                    tail = (state_row + D).to(tl.pointer_type(tl.int64))
+                    tl.store(tail, pos_t.to(tl.int64), mask=valid_slot)
+                    tl.store(tail + 1, pos_h.to(tl.int64), mask=valid_slot)
+                    tl.store(tail + 2, pos_w.to(tl.int64), mask=valid_slot)
+            else:
+                num_state_rows = tl.minimum(query_len, STATE_SIZE)
+                rows = tl.arange(0, STATE_SIZE)
+                rmask = rows < num_state_rows
+                tokens = (query_end - num_state_rows + rows).to(tl.int64)
+                valid_token = (
+                    (tokens >= query_start)
+                    & (tokens < query_end)
+                    & (tokens < num_tokens)
+                )
+                slot = tl.load(
+                    state_slots_ptr + tokens, mask=rmask & valid_token, other=-1
+                )
+                valid_slot = (
+                    valid_token & (slot >= 0) & (slot < num_state_blocks * STATE_SIZE)
+                )
+                safe_slot = tl.maximum(slot, 0)
+                block_idx = (safe_slot // STATE_SIZE).to(tl.int64)
+                ring_idx = safe_slot % STATE_SIZE
+                state_row = (
+                    state_cache_ptr
+                    + block_idx[:, None] * state_cache_stride_block
+                    + ring_idx[:, None] * state_cache_stride_token
+                )
+                d2 = (rmask & valid_slot)[:, None]
+                src = k_ptr + tl.maximum(tokens, 0)[:, None] * k_stride_token
+                k = tl.load(src + dims[None, :], mask=d2, other=0.0)
+                tl.store(state_row + dims[None, :], k, mask=d2)
+                if CACHE_HAS_ROPE_POS:
+                    smask = rmask & valid_slot
+                    safe_tokens = tl.maximum(tokens, 0)
+                    pos_t = tl.load(
+                        pos_ptr + safe_tokens * pos_stride_token, mask=smask, other=0
                     )
-                else:
-                    pos_h = pos_t
-                    pos_w = pos_t
-                tail = (state_row + D).to(tl.pointer_type(tl.int64))
-                tl.store(tail, pos_t.to(tl.int64)[:, None], mask=d2)
-                tl.store(tail + 1, pos_h.to(tl.int64)[:, None], mask=d2)
-                tl.store(tail + 2, pos_w.to(tl.int64)[:, None], mask=d2)
+                    if IS_2D_POSITIONS:
+                        pos_h = tl.load(
+                            pos_ptr + pos_stride_axis + safe_tokens * pos_stride_token,
+                            mask=smask,
+                            other=0,
+                        )
+                        pos_w = tl.load(
+                            pos_ptr + 2 * pos_stride_axis + safe_tokens * pos_stride_token,
+                            mask=smask,
+                            other=0,
+                        )
+                    else:
+                        pos_h = pos_t
+                        pos_w = pos_t
+                    tail = (state_row + D).to(tl.pointer_type(tl.int64))
+                    tl.store(tail, pos_t.to(tl.int64)[:, None], mask=d2)
+                    tl.store(tail + 1, pos_h.to(tl.int64)[:, None], mask=d2)
+                    tl.store(tail + 2, pos_w.to(tl.int64)[:, None], mask=d2)
 
 
 def _qwen_qsa_prepare_uncached(
@@ -710,6 +769,11 @@ def _qwen_qsa_prepare_uncached(
     num_main_work = triton.cdiv(num_tokens, MAIN_TILE_T) * (
         num_main_q_heads + num_main_kv_heads
     )
+    # The ring commit stores min(query_len, STATE_SIZE) rows, so when every request
+    # contributes a single token it writes one row for all of them. Sum(query_lens)
+    # is num_tokens, so the token count equalling the request count means every
+    # query_len is 1. Both are shapes, so this dispatches without reading a tensor.
+    decode_only = num_tokens == query_start_loc.shape[0] - 1
     launch_pos = (
         q,
         q.stride(0),
@@ -775,6 +839,7 @@ def _qwen_qsa_prepare_uncached(
         MAIN_D=main_head_dim,
         MAIN_PAGE_SIZE=main_kv_cache.shape[1],
         MAIN_TILE_T=MAIN_TILE_T,
+        DECODE_ONLY=decode_only,
         num_warps=1,
     )
     grid0 = num_k_work + num_q_work + num_main_work
@@ -812,6 +877,7 @@ def _qwen_qsa_prepare_uncached(
             main_head_dim,
             main_kv_cache.shape[1],
             MAIN_TILE_T,
+            decode_only,
         )
     )
     compiled = _qsa_prepare_kernel[(grid0,)](*launch_pos, **launch_kw)
