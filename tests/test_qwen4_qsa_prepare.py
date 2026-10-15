@@ -19,7 +19,6 @@ from __future__ import annotations
 import pytest
 import torch
 
-import flaggems_vllm
 from flaggems_vllm.ops.qwen4.qsa_prepare import qwen_qsa_prepare
 
 # ------------------------------------------------------------------ constants
@@ -70,9 +69,7 @@ CASES = [
     pytest.param(
         True, False, False, 8, MIXED_BATCH, id="mrope-model-1d-no-position-cache"
     ),
-    pytest.param(
-        False, False, True, 4, MIXED_BATCH, id="text-with-position-cache"
-    ),
+    pytest.param(False, False, True, 4, MIXED_BATCH, id="text-with-position-cache"),
     pytest.param(True, True, True, 4, FRESH_BATCH, id="fresh"),
     pytest.param(True, True, True, 4, TILED_BATCH, id="tiled"),
 ]
@@ -196,9 +193,7 @@ def _main_norm_rope_gate(
 
             if case.is_2d_positions:
                 pos = case.positions[:, token].to(torch.int64)
-                axis_pos = torch.where(
-                    is_h, pos[1], torch.where(is_w, pos[2], pos[0])
-                )
+                axis_pos = torch.where(is_h, pos[1], torch.where(is_w, pos[2], pos[0]))
             else:
                 # A 1D position table means the temporal position on all axes.
                 axis_pos = case.positions[token].to(torch.int64).expand(MAIN_HALF)
@@ -218,19 +213,18 @@ def _main_norm_rope_gate(
                         _store_rotated(y, o1, o2, kv_dtype, scale_k)
                     )
                     value = qkv[
-                        token, src + MAIN_KV_HEADS * MAIN_HEAD_DIM : src
-                        + MAIN_KV_HEADS * MAIN_HEAD_DIM + MAIN_HEAD_DIM
+                        token,
+                        src
+                        + MAIN_KV_HEADS * MAIN_HEAD_DIM : src
+                        + MAIN_KV_HEADS * MAIN_HEAD_DIM
+                        + MAIN_HEAD_DIM,
                     ]
                     kv_cache[block, row_index, kv_head, MAIN_HEAD_DIM:].copy_(
                         _to_dst_dtype(value, kv_dtype, scale_v)
                     )
             else:
-                q_out[token, head].copy_(
-                    _store_rotated(y, o1, o2, q_dtype, None)
-                )
-                gate = qkv[
-                    token, src + MAIN_HEAD_DIM : src + 2 * MAIN_HEAD_DIM
-                ]
+                q_out[token, head].copy_(_store_rotated(y, o1, o2, q_dtype, None))
+                gate = qkv[token, src + MAIN_HEAD_DIM : src + 2 * MAIN_HEAD_DIM]
                 gate_out[token, head].copy_(gate)
 
 
@@ -247,9 +241,7 @@ def _main_inputs(case: "QsaPrepareCase", fp8_cache: bool) -> dict:
         dtype=torch.uint8 if fp8_cache else torch.bfloat16,
         device=case.device,
     ).transpose(1, 2)
-    slots = torch.randperm(num_blocks * MAIN_PAGE_SIZE, device=case.device)[
-        :num_tokens
-    ]
+    slots = torch.randperm(num_blocks * MAIN_PAGE_SIZE, device=case.device)[:num_tokens]
     slots[-1] = -1
     norm_weights = (
         torch.randn(2, MAIN_HEAD_DIM, dtype=torch.bfloat16, device=case.device) * 0.2
@@ -588,7 +580,14 @@ class QsaPrepareCase:
         self._reference_compress(raw_cache, compressed_cache)
         self._reference_state_ring(raw_cache)
         _main_norm_rope_gate(self, main_q_out, main_gate_out, main_kv_cache)
-        return query_out, raw_cache, compressed_cache, main_q_out, main_gate_out, main_kv_cache
+        return (
+            query_out,
+            raw_cache,
+            compressed_cache,
+            main_q_out,
+            main_gate_out,
+            main_kv_cache,
+        )
 
     def _reference_compress(self, raw_cache, compressed_cache) -> None:
         raw_keys = self.key.reshape(self.num_tokens, 1, HEAD_DIM)
@@ -652,9 +651,9 @@ class QsaPrepareCase:
                     torch.tensor([token], device=self.device)
                 )[0]
             else:
-                positions[index] = raw_cache[
-                    ring[0], ring[1], 0, HEAD_DIM:
-                ].view(torch.int64)[:3]
+                positions[index] = raw_cache[ring[0], ring[1], 0, HEAD_DIM:].view(
+                    torch.int64
+                )[:3]
         normalized = _apply_interleaved_mrope(
             normalized, positions, self.cos_sin_cache, self.mrope
         )
@@ -739,9 +738,7 @@ def _assert_matches(actual, expected) -> None:
     # The gate is copied, not computed, so it must agree exactly.
     assert torch.equal(main_gate_out, expected_main_gate), "main gate mismatch"
     if main_kv_cache.dtype == torch.float8_e4m3fn:
-        _assert_fp8_within_one_ulp(
-            main_kv_cache, expected_main_cache, "main kv cache"
-        )
+        _assert_fp8_within_one_ulp(main_kv_cache, expected_main_cache, "main kv cache")
     else:
         torch.testing.assert_close(
             main_kv_cache, expected_main_cache, rtol=RTOL, atol=ATOL
@@ -771,9 +768,7 @@ def _case(mrope, is_2d_positions, cache_rope_positions, state_size, batch, dtype
 def test_qwen_qsa_prepare_matches_torch_reference(
     mrope, is_2d_positions, cache_rope_positions, state_size, batch, dtype
 ) -> None:
-    case = _case(
-        mrope, is_2d_positions, cache_rope_positions, state_size, batch, dtype
-    )
+    case = _case(mrope, is_2d_positions, cache_rope_positions, state_size, batch, dtype)
     _assert_matches(case.run_kernel(), case.run_reference())
 
 
@@ -792,9 +787,7 @@ def test_qwen_qsa_prepare_matches_vllm(
         reason="vLLM is required for the cross-check",
     ).qsa_prepare
 
-    case = _case(
-        mrope, is_2d_positions, cache_rope_positions, state_size, batch, dtype
-    )
+    case = _case(mrope, is_2d_positions, cache_rope_positions, state_size, batch, dtype)
     actual = case.run_kernel()
 
     outputs = case.outputs()
