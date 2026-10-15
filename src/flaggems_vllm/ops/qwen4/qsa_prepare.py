@@ -619,7 +619,9 @@ def _qsa_prepare_kernel(
                             other=0,
                         )
                         pos_w = tl.load(
-                            pos_ptr + 2 * pos_stride_axis + safe_token * pos_stride_token,
+                            pos_ptr
+                            + 2 * pos_stride_axis
+                            + safe_token * pos_stride_token,
                             mask=valid_slot,
                             other=0,
                         )
@@ -671,7 +673,9 @@ def _qsa_prepare_kernel(
                             other=0,
                         )
                         pos_w = tl.load(
-                            pos_ptr + 2 * pos_stride_axis + safe_tokens * pos_stride_token,
+                            pos_ptr
+                            + 2 * pos_stride_axis
+                            + safe_tokens * pos_stride_token,
                             mask=smask,
                             other=0,
                         )
