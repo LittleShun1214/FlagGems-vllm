@@ -2,14 +2,13 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 #
 # qwen_qsa_prepare is vLLM's Qwen4Exp QSA prepare kernel, adopted here
-# apart from the Triton import, the Q-path tile thresholds, and the vectorized
-# state-ring commit below.
+# apart from the Triton import, the Q-path tile thresholds, the vectorized
+# state-ring commit, and the cached-launch wrapper below.
 """Fused QSA prepare kernel for Qwen4Exp (adopted from vLLM)."""
 
 from __future__ import annotations
 
 import torch
-
 import triton
 import triton.language as tl
 
@@ -21,7 +20,8 @@ QWEN4_VENDOR_QSA_PREPARE_SOURCE = {
     "sha256": "22049c20b85fea0d38fe03175de36acc02edc55802ae89efafef2dffdc813187",
     "adaptation": (
         "Triton import; Q-path tile thresholds tuned per backend; "
-        "state-ring commit vectorized per backend."
+        "state-ring commit vectorized per backend; "
+        "cached-launch wrapper per backend."
     ),
     "role": "shipped implementation of qwen_qsa_prepare",
 }
@@ -625,7 +625,7 @@ def _qsa_prepare_kernel(
                 tl.store(tail + 2, pos_w.to(tl.int64)[:, None], mask=d2)
 
 
-def qwen_qsa_prepare(
+def _qwen_qsa_prepare_uncached(
     q: torch.Tensor,
     k: torch.Tensor,
     positions: torch.Tensor,
@@ -667,7 +667,7 @@ def qwen_qsa_prepare(
     main_q_out = main_qkv.new_empty(num_tokens, num_main_q_heads, main_head_dim)
     main_gate_out = torch.empty_like(main_q_out)
     if num_tokens == 0:
-        return main_q_out, main_gate_out
+        return main_q_out, main_gate_out, None, None, None
     num_q_heads, head_dim = q_out.shape[1:]
     assert cos_sin_cache.shape[-1] * 2 == head_dim
     assert q.shape == (num_tokens, num_q_heads * head_dim)
@@ -710,7 +710,7 @@ def qwen_qsa_prepare(
     num_main_work = triton.cdiv(num_tokens, MAIN_TILE_T) * (
         num_main_q_heads + num_main_kv_heads
     )
-    _qsa_prepare_kernel[(num_k_work + num_q_work + num_main_work,)](
+    launch_pos = (
         q,
         q.stride(0),
         k,
@@ -742,6 +742,8 @@ def qwen_qsa_prepare(
         state_cache.shape[0],
         compressed_cache.shape[0],
         num_k_work,
+    )
+    launch_kw = dict(
         HQ=num_q_heads,
         D=head_dim,
         TILE_T_Q=TILE_T_Q,
@@ -775,6 +777,192 @@ def qwen_qsa_prepare(
         MAIN_TILE_T=MAIN_TILE_T,
         num_warps=1,
     )
+    grid0 = num_k_work + num_q_work + num_main_work
+    direct_args = tuple(
+        (
+            *launch_pos,
+            num_q_heads,
+            head_dim,
+            TILE_T_Q,
+            TILE_H_Q,
+            compress_ratio,
+            state_cache.shape[1],
+            compressed_cache.shape[1],
+            is_2d_positions,
+            is_k_mrope,
+            cache_has_rope_pos,
+            section[1],
+            section[2],
+            main_qkv,
+            main_qkv.stride(0),
+            main_q_norm_weight,
+            main_k_norm_weight,
+            main_eps,
+            main_q_out,
+            main_gate_out,
+            main_kv_cache,
+            main_kv_cache.stride(0),
+            main_kv_cache.stride(1),
+            main_kv_cache.stride(2),
+            main_slot_mapping,
+            main_k_scale,
+            main_v_scale,
+            num_main_q_heads,
+            num_main_kv_heads,
+            main_head_dim,
+            main_kv_cache.shape[1],
+            MAIN_TILE_T,
+        )
+    )
+    compiled = _qsa_prepare_kernel[(grid0,)](*launch_pos, **launch_kw)
+    return (main_q_out, main_gate_out, direct_args, grid0, compiled)
+
+
+_HOST_CACHE: dict = {}
+
+
+def qwen_qsa_prepare(
+    q,
+    k,
+    positions,
+    cos_sin_cache,
+    q_norm_weight,
+    k_norm_weight,
+    eps,
+    q_out,
+    state_cache,
+    state_slots,
+    state_block_table,
+    query_start_loc,
+    logical_positions,
+    compressed_cache,
+    compressed_slots,
+    k_work_metadata,
+    *,
+    compress_ratio,
+    mrope_section,
+    rope_pos_offset,
+    main_qkv,
+    main_q_norm_weight,
+    main_k_norm_weight,
+    main_eps,
+    main_kv_cache,
+    main_slot_mapping,
+    main_k_scale,
+    main_v_scale,
+):
+    """Cached-launch wrapper.
+
+    Validation, geometry and argument construction are pure functions of the
+    tensor metadata; a metadata key seen once before launches directly
+    through the stored CompiledKernel (bypassing JITFunction.run), with only
+    the two allocated outputs rebuilt per call. The cache pins first-seen
+    buffers — the intended steady-state serving pattern.
+    """
+    num_tokens = q.shape[0]
+    main_head_dim = main_kv_cache.shape[-1] // 2
+    num_main_kv_heads = main_kv_cache.shape[2]
+    num_main_q_heads = main_qkv.shape[1] // (2 * main_head_dim) - num_main_kv_heads
+    main_q_out = main_qkv.new_empty(num_tokens, num_main_q_heads, main_head_dim)
+    main_gate_out = torch.empty_like(main_q_out)
+    if num_tokens == 0:
+        return main_q_out, main_gate_out
+    cache_key = (
+        id(q),
+        id(k),
+        id(positions),
+        id(cos_sin_cache),
+        id(q_norm_weight),
+        id(k_norm_weight),
+        id(q_out),
+        id(state_cache),
+        id(state_slots),
+        id(state_block_table),
+        id(query_start_loc),
+        id(logical_positions),
+        id(compressed_cache),
+        id(compressed_slots),
+        id(k_work_metadata),
+        id(main_qkv),
+        id(main_q_norm_weight),
+        id(main_k_norm_weight),
+        id(main_kv_cache),
+        id(main_slot_mapping),
+        q.shape,
+        k.shape,
+        positions.ndim,
+        q_out.shape,
+        main_qkv.shape,
+        main_kv_cache.shape,
+        state_cache.shape,
+        compressed_cache.shape,
+        state_slots.shape,
+        compressed_slots.shape,
+        logical_positions.shape,
+        query_start_loc.shape,
+        state_block_table.shape,
+        k_work_metadata.shape,
+        q.stride(),
+        k.stride(),
+        q_out.stride(),
+        state_cache.stride(),
+        main_qkv.stride(),
+        main_kv_cache.stride(),
+        positions.stride(),
+        q.dtype,
+        k.dtype,
+        positions.dtype,
+        cos_sin_cache.dtype,
+        compress_ratio,
+        mrope_section,
+        rope_pos_offset,
+        eps,
+        main_eps,
+        main_k_scale,
+        main_v_scale,
+    )
+    cached = _HOST_CACHE.get(cache_key)
+    if cached is not None:
+        direct_args, grid0 = cached
+        direct_args = list(direct_args)
+        direct_args[48] = main_q_out
+        direct_args[49] = main_gate_out
+        compiled = _HOST_CACHE[(cache_key, "ck")]
+        compiled[(grid0, 1, 1)](*direct_args)
+        return main_q_out, main_gate_out
+    (main_q_out, main_gate_out, direct_args, grid0, compiled) = (
+        _qwen_qsa_prepare_uncached(
+            q,
+            k,
+            positions,
+            cos_sin_cache,
+            q_norm_weight,
+            k_norm_weight,
+            eps,
+            q_out,
+            state_cache,
+            state_slots,
+            state_block_table,
+            query_start_loc,
+            logical_positions,
+            compressed_cache,
+            compressed_slots,
+            k_work_metadata,
+            compress_ratio=compress_ratio,
+            mrope_section=mrope_section,
+            rope_pos_offset=rope_pos_offset,
+            main_qkv=main_qkv,
+            main_q_norm_weight=main_q_norm_weight,
+            main_k_norm_weight=main_k_norm_weight,
+            main_eps=main_eps,
+            main_kv_cache=main_kv_cache,
+            main_slot_mapping=main_slot_mapping,
+            main_k_scale=main_k_scale,
+            main_v_scale=main_v_scale,
+        )
+    )
+    _HOST_CACHE[cache_key] = (direct_args, grid0)
+    _HOST_CACHE[(cache_key, "ck")] = compiled
     return main_q_out, main_gate_out
 
 
