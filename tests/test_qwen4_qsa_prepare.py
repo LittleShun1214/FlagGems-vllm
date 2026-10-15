@@ -51,11 +51,11 @@ MAIN_V_SCALE = 2.0
 MAIN_HALF = HEAD_DIM // 4
 MAIN_ROTARY_DIM = 2 * MAIN_HALF
 
-# Each entry below is a batch scenario, not a tensor size: _case() expands one
-# entry into about two dozen operands whose shapes are unrelated to each other,
-# from (128,) norm weights up to a (32768, 64) rope table. The entries vary the
-# RoPE and position-cache layout, which selects different code paths inside the
-# kernel, over three batch layouts.
+# Each entry in CASES is a batch scenario combined with a code-path setting, not a
+# tensor size: _case() expands one entry into about two dozen operands whose shapes
+# are unrelated to each other, from (128,) norm weights up to a (32768, 64) rope
+# table. The settings vary the RoPE and position-cache layout, which selects
+# different code paths inside the kernel, across eight batch layouts.
 
 MIXED_BATCH = ([260, 259, 138], [1, 1, 37], [8, 8, 8])
 FRESH_BATCH = ([37], [37], [0])
@@ -64,6 +64,27 @@ TILED_BATCH = ([4097], [4097], [0])
 # request contributes one token, so the ring commit stores a single row for each
 # of them and takes the scalar path instead of the [STATE_SIZE, D] tile.
 DECODE_BATCH = ([512] * 16, [1] * 16, [8] * 16)
+
+# The layouts below sit at the envelope vLLM actually allows rather than at the
+# sizes a lone request produces. On this class of GPU (its >= 70 GiB, non-A100
+# tier) the defaults are max_num_seqs = 1024 and max_num_batched_tokens = 8192 for
+# an OpenAI server, 16384 for offline throughput.
+#
+# A loaded server decodes with every slot busy, which is also when the scalar ring
+# commit and the main-attention tiling meet: 1024 tokens is exactly MAIN_TILE_T's
+# threshold, so DECODE_MAX is the only layout combining the two.
+DECODE_DEEP = ([512] * 512, [1] * 512, [8] * 512)
+DECODE_MAX = ([512] * 1024, [1] * 1024, [8] * 1024)
+# The ceilings the benchmark's last rows carry: 1010 + 14 = 1024 sequences, which
+# is max_num_seqs, holding 8178 tokens — as close to the 8192 serving token budget
+# as max_num_seqs allows.
+MIXED_DEEP = (
+    [512] * 1024,
+    [1] * 1010 + [512] * 14,
+    [8] * 1010 + [0] * 14,
+)
+# One request filling the offline token budget, which is twice the serving one.
+LONG_BATCH = ([16384], [16384], [0])
 
 CASES = [
     pytest.param(True, True, True, 4, MIXED_BATCH, id="mrope"),
@@ -82,6 +103,11 @@ CASES = [
     pytest.param(
         False, False, False, 4, DECODE_BATCH, id="decode-text-no-position-cache"
     ),
+    pytest.param(True, True, True, 4, DECODE_DEEP, id="decode-deep"),
+    pytest.param(True, True, True, 8, DECODE_DEEP, id="decode-deep-state-8"),
+    pytest.param(True, True, True, 4, DECODE_MAX, id="decode-max"),
+    pytest.param(True, True, True, 4, MIXED_DEEP, id="mixed-deep"),
+    pytest.param(True, True, True, 4, LONG_BATCH, id="long"),
 ]
 
 DTYPES = [
