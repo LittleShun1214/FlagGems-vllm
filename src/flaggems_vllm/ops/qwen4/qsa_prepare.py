@@ -1,10 +1,22 @@
-# SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# Copyright 2026 FlagOS Contributors
 #
-# qwen_qsa_prepare is vLLM's Qwen4Exp QSA prepare kernel, adopted here
-# apart from the Triton import, the Q-path tile thresholds, the vectorized
-# state-ring commit, and the cached-launch wrapper below.
-"""Fused QSA prepare kernel for Qwen4Exp (adopted from vLLM)."""
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Fused QSA prepare kernel for Qwen4Exp, forked from vLLM's implementation.
+
+The upstream revision this started from, and what was changed since, are
+recorded in ``QWEN4_VENDOR_QSA_PREPARE_SOURCE`` below.
+"""
 
 from __future__ import annotations
 
@@ -19,9 +31,11 @@ QWEN4_VENDOR_QSA_PREPARE_SOURCE = {
     "path": "vllm/models/qwen4_exp/nvidia/ops/qsa_prepare.py",
     "sha256": "22049c20b85fea0d38fe03175de36acc02edc55802ae89efafef2dffdc813187",
     "adaptation": (
-        "Triton import; Q-path tile thresholds tuned per backend; "
-        "state-ring commit vectorized per backend; "
-        "cached-launch wrapper per backend."
+        "Triton import standalone rather than from vllm.triton_utils; "
+        "main-attention path tiles tokens; "
+        "state-ring commit vectorized, with a scalar form for single-token "
+        "requests; "
+        "launch wrapped in a metadata-keyed cache."
     ),
     "role": "shipped implementation of qwen_qsa_prepare",
 }
