@@ -49,7 +49,6 @@ else:
     from flaggems_vllm.ops.persistent_topk import persistent_topk
 
 __all__ = [
-    "qsa_prepare",
     "fused_experts_impl",
     "fused_recurrent_gated_delta_rule_fwd",
     "fused_recurrent_gated_delta_rule_packed_decode",
@@ -59,6 +58,7 @@ __all__ = [
     "per_token_group_quant_fp8",
     "persistent_topk",
     "ple_state_scatter_",
+    "qsa_prepare",
     "qwen4_compress_norm_mrope_store_groups",
     "qwen4_hc_inject_combine",
     "qwen4_qsa_mqa_paged_dot",

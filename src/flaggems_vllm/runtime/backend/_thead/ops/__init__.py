@@ -42,7 +42,6 @@ from flaggems_vllm.runtime.backend._thead.ops.w8a8_block_int8_matmul import (
 )
 
 __all__ = [
-    "qsa_prepare",
     "fused_experts_impl",
     "gemma_rms_norm",
     "indexer_k_quant_and_cache",
@@ -51,6 +50,7 @@ __all__ = [
     "outplace_fused_experts",
     "per_token_group_quant_fp8",
     "persistent_topk",
+    "qsa_prepare",
     "SUPPORTED_FP8_DTYPE",
     "topk_softplus_sqrt",
     "w8a8_block_int8_bmm",
