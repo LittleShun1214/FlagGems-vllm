@@ -45,6 +45,7 @@ from flaggems_vllm.runtime.backend._mthreads.ops.persistent_topk import persiste
 from flaggems_vllm.runtime.backend._mthreads.ops.ple_state import ple_state_scatter_
 from flaggems_vllm.runtime.backend._mthreads.ops.qsa import qwen4_store_qsa_kv_rows
 from flaggems_vllm.runtime.backend._mthreads.ops.qsa_mqa import qwen4_qsa_mqa_paged_dot
+from flaggems_vllm.runtime.backend._mthreads.ops.qsa_prepare import qsa_prepare
 from flaggems_vllm.runtime.backend._mthreads.ops.scaled_int8_quant import (
     scaled_int8_quant,
 )
@@ -56,6 +57,7 @@ from flaggems_vllm.runtime.backend._mthreads.ops.w8a8_block_fp8_matmul import (
 )
 
 __all__ = [
+    "qsa_prepare",
     "dequantize_and_gather_k_cache",
     "flash_attn_varlen_func_w8a8_fp8",
     "fused_experts_impl",
